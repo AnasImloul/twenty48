@@ -3,3 +3,6 @@
 .DS_Store
 *.profraw
 perf.data*
+
+# Local network workaround, see the file for why.
+/.cargo/

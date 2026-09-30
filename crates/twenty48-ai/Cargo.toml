@@ -1,0 +1,11 @@
+[package]
+name = "twenty48-ai"
+description = "An expectimax agent for the twenty48 engine."
+keywords = ["2048", "expectimax", "ai", "search"]
+categories = ["games", "game-development"]
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+twenty48.workspace = true

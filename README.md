@@ -161,11 +161,30 @@ on the `1e-4` floor below it buys nothing: the two rows are within the noise of
 each other, and 2048 scores are noisy enough that the twelve- and twenty-four
 game samples here separate 2x differences and not much finer.
 
-Games are independent, so the parallelism is one game per core and nothing
-inside the search: splitting a search would cap out at the four root moves and
-force a transposition table to be shared across threads. Twelve threads reach
-about 10x the single-core node rate on an 8+4 core M2 Max, and the per-move
-latency above degrades to 3.33 ms when all twelve are busy.
+There are two ways to spend a machine here and they answer different
+questions. Sharding games across cores is what an evaluation run wants, since
+the result is a score distribution and games never synchronise: on an 8+4 core
+M2 Max twelve games at once reach 222 M nodes/s against 37 M on one core,
+though the per-move latency above degrades to 2.58 ms while all twelve are
+busy.
+
+`Search::with_threads` instead splits a single move, which is what a UI wants,
+because there is only one game on screen to spend the machine on. The split is
+the root chance layer rather than the four root moves: every (move, spawned
+tile) pair below the root is an independent subtree, so a mid-game position
+offers around fifty pieces of work instead of four. Twelve threads take the
+default depth from 1.82 ms to 0.52 ms per move. That is 3.5x the latency
+against 4.5x the node rate, the gap being work the threads duplicate before
+the shared table catches up.
+
+Shared, not one per thread. The transposition table is not only a cache: an
+entry satisfies any request for its board at that depth *or shallower*, so a
+hit often returns a better answer than the caller would have computed. Giving
+each thread its own measures three times the nodes and one fifth of the score.
+The price of sharing it is reproducibility, because which thread reaches a
+position first decides what later lookups of it return, so seeded games only
+replay exactly on `Search::new`. Over the same twelve seeds the split search
+means 328 079 against 341 636, which is inside the noise.
 
 ## Testing
 

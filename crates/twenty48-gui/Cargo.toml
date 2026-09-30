@@ -1,0 +1,11 @@
+[package]
+name = "twenty48-gui"
+description = "A desktop and web UI for the twenty48 engine and its expectimax agent."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "wgpu"] }
+twenty48.workspace = true
+twenty48-ai.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "twenty48"
+description = "A 2048 engine built on a u64 bitboard."
+keywords = ["2048", "game", "bitboard", "expectimax"]
+categories = ["games", "game-development"]
+readme = "../../README.md"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+
+[[bench]]
+name = "throughput"
+harness = false

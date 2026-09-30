@@ -57,12 +57,12 @@ pub struct Config {
 }
 
 impl Default for Config {
-    /// Depth 5 at a floor of `1e-3`, which is about 3ms per move and reaches
-    /// 32768.
+    /// Depth 5 at a floor of `1e-3`, which is about 1.5ms per move on one core
+    /// and reaches 32768.
     ///
-    /// Depth 4 is under 1ms but scores roughly half as much, and dropping the
-    /// floor to `1e-4` costs four times as long per move for no measurable
-    /// gain. See the table in the README.
+    /// Depth 4 is well under 1ms but scores roughly half as much, and dropping
+    /// the floor to `1e-4` costs three and a half times as long per move for
+    /// no measurable gain. See the table in the README.
     fn default() -> Config {
         Config {
             depth: 5,

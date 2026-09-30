@@ -10,7 +10,7 @@ the search yourself.
 That game is the agent at depth 8, which it played to 32768 and on to a score
 of 623992 over 21977 moves, at 3.1 ms and 90476 nodes per move. Reaching the
 largest tile is routine rather than lucky: over twenty-four seeded games at the
-default settings the median score is 342976, and every game ends on 8192 or
+default settings the median score is 359052, and every game ends on 8192 or
 better. The [full distribution](#an-agent) is below.
 
 ## Get it
@@ -135,7 +135,7 @@ The tables are 768 KiB, which is the usual reason to be suspicious of this
 design. The objection does not survive measurement: reachable rows are
 dominated by small exponents and mostly-monotone runs, and a couple of hundred
 thousand lookups over 256 games touch 3390 of the 65536 rows, spanning 20 KiB
-of each table. Sliding real boards runs about 20% faster than sliding boards
+of each table. Sliding real boards runs about 18% faster than sliding boards
 made of random bits, and the `cargo bench` output reports both so the gap stays
 visible.
 
@@ -152,12 +152,12 @@ release assembly for `panic_bounds_check` to keep it that way.
 ## Measured throughput
 
 ```
-shift, played boards         724.6 M shifts/s
-shift, random boards         591.1 M shifts/s
-spawn, draw and place         74.3 M spawns/s
+shift, played boards         726.0 M shifts/s
+shift, random boards         614.2 M shifts/s
+spawn, draw and place         76.8 M spawns/s
 round, random policy          22.1 M rounds/s
-round, down-first policy      40.1 M rounds/s
-node, expectimax depth 3     293.4 M nodes/s
+round, down-first policy      40.3 M rounds/s
+node, expectimax depth 3     297.3 M nodes/s
 ```
 
 Apple M2 Max, rustc 1.94.1, `lto = "fat"` and `codegen-units = 1`. Reproduce
@@ -178,10 +178,10 @@ consumer it was designed around. Twenty-four seeded games at the default
 settings:
 
 ```
-70127 nodes and 3.33 ms per move, 298049 moves over all games
-21.1 M nodes/s per core, 221.5 M across the machine
+69684 nodes and 2.15 ms per move, 308403 moves over all games
+32.3 M nodes/s per core, 307.5 M across the machine
 
-score: mean 325501, median 342976, best 630036
+score: mean 336501, median 359052, best 628212
 
 largest tile reached:
   32768     2    8%
@@ -201,36 +201,39 @@ the late game, where the board is crowded and a chance node has few children.
 depth alone bounds nothing: a branch whose probability of being reached falls
 below it is evaluated rather than expanded.
 
-Both matter, so both are tunable. Time per move here is measured on one core,
-because that is the latency a single game sees:
+Both matter, so both are tunable. Time per move is measured on one core,
+because that is the latency a single game sees; every other column is the same
+twenty-four seeded games, which at one thread replay exactly:
 
 | `--depth` | `--floor` | ms/move | nodes/move | mean score | best tile |
 |---|---|---|---|---|---|
-| 3 | 1e-3 | 0.15 | 5 150 | | 8192 |
-| 4 | 1e-3 | 0.91 | 28 503 | 186 044 | 16384 |
-| 5 | 1e-3 | 2.43 | 70 344 | 325 501 | 32768 |
-| 5 | 3e-4 | 5.01 | 153 328 | | |
-| 5 | 1e-4 | 10.60 | 260 124 | 278 535 | 16384 |
+| 3 | 1e-3 | 0.13 | 6 471 | 113 631 | 16384 |
+| 4 | 1e-3 | 0.63 | 28 411 | 186 044 | 16384 |
+| 5 | 1e-3 | 1.52 | 69 684 | 336 501 | 32768 |
+| 5 | 3e-4 | 3.79 | 152 396 | 250 634 | 16384 |
+| 5 | 1e-4 | 5.41 | 256 381 | 290 094 | 16384 |
 
-Depth 5 at a `1e-3` floor is the default. Spending four times as long per move
-on the `1e-4` floor below it buys nothing: the two rows are within the noise of
-each other, and 2048 scores are noisy enough that the twelve- and twenty-four
-game samples here separate 2x differences and not much finer.
+Depth 5 at a `1e-3` floor is the default. Tightening the floor below it buys
+nothing: the three floors cost up to three and a half times as long per move
+and none of them scores better, which is easier to believe once you know that
+2048 scores are noisy enough for a twenty-four game sample to separate 2x
+differences and not much finer. Depth is where the gain is, and it is the one
+setting that reaches 32768 at all.
 
 There are two ways to spend a machine here and they answer different
 questions. Sharding games across cores is what an evaluation run wants, since
 the result is a score distribution and games never synchronise: on an 8+4 core
-M2 Max twelve games at once reach 222 M nodes/s against 37 M on one core,
-though the per-move latency above degrades to 2.58 ms while all twelve are
-busy.
+M2 Max twelve games at once reach 308 M nodes/s against 44 M on one core,
+though the per-move latency above degrades from 1.52 to 2.15 ms while all
+twelve are busy.
 
 `Search::with_threads` instead splits a single move, which is what a UI wants,
 because there is only one game on screen to spend the machine on. The split is
 two plies down rather than on the four root moves: a piece of work is a root
 move, a tile the game could place in reply, and one answer to that tile, which
 gives a mid-game position a hundred or so pieces instead of four. Twelve
-threads take the default depth to a fifth of the single-threaded latency per
-move.
+threads take the default depth to under a quarter of the single-threaded
+latency per move, 0.35 ms against 1.52.
 
 Getting that granularity right was most of the work. Stopping a ply short, one
 piece per tile the game could place, looks like plenty of parallelism at fifty
@@ -249,11 +252,12 @@ hit often returns a better answer than the caller would have computed. Giving
 each thread its own measures three times the nodes and one fifth of the score.
 The price of sharing it is reproducibility, because which thread reaches a
 position first decides what later lookups of it return, so seeded games only
-replay exactly on `Search::new`. It costs a little strength too: over
-twenty-four seeds the split search means 275 432 against 336 501 serial, and
-reaches 16384 in eleven games against sixteen. Both find 32768 twice. That is
-a real if modest loss and not merely a noisy sample, which is the trade the
-split makes for answering five times sooner.
+replay exactly on `Search::new`. It costs a little strength too, and how much
+is not fixed: over the same twenty-four seeds three split runs meant 240 664,
+288 991 and 302 818, against a serial 336 501 that reproduces to the point on
+every run, and only one of the three found 32768 at all. That is a real if
+modest loss, which is the trade the split makes for answering four times
+sooner.
 
 ## Testing
 

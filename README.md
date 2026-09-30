@@ -54,7 +54,10 @@ for offset in next.empty_cells() {
 
 Use `Board::shift_all` rather than four calls to `Board::shift` when expanding a
 node; it shares the transpose between the vertical moves and leaves sixteen
-table loads with no dependencies between them.
+table loads with no dependencies between them. `Board::transpose` is public for
+a related reason: an evaluation function that scores one line at a time wants
+the columns as rows, and that is otherwise the one piece of the engine an agent
+would have to reimplement.
 
 ## How it works
 
@@ -112,6 +115,58 @@ game-over check. A *node* is a position visited by a depth-3 expectimax whose
 position evaluation is one instruction, so it measures the engine under a
 search rather than the search itself.
 
+## An agent
+
+`examples/expectimax.rs` is a real player rather than a demonstration, and it
+exists mostly to check that the API is adequate for the consumer it was
+designed around. Twenty-four seeded games at the default settings:
+
+```
+70127 nodes and 3.33 ms per move, 298049 moves over all games
+21.1 M nodes/s per core, 221.5 M across the machine
+
+score: mean 325501, median 342976, best 630036
+
+largest tile reached:
+  32768     2    8%
+  16384    16   66%
+   8192     6   25%
+```
+
+It reaches 32768, which is the largest tile four bits can hold. That is worth
+more than a test: such a game exercises the rule that two 32768s do not merge,
+on a board the engine played into rather than one written by hand.
+
+The position evaluation is a table over all 65536 lines, so scoring a board is
+eight lookups, four rows and four columns after a `transpose`. Two settings
+bound the work, and they bind at opposite ends of the game. `--depth` bounds
+the late game, where the board is crowded and a chance node has few children.
+`--floor` bounds the early game, where a chance node fans out thirty ways and
+depth alone bounds nothing: a branch whose probability of being reached falls
+below it is evaluated rather than expanded.
+
+Both matter, so both are tunable. Time per move here is measured on one core,
+because that is the latency a single game sees:
+
+| `--depth` | `--floor` | ms/move | nodes/move | mean score | best tile |
+|---|---|---|---|---|---|
+| 3 | 1e-3 | 0.15 | 5 150 | | 8192 |
+| 4 | 1e-3 | 0.91 | 28 503 | 186 044 | 16384 |
+| 5 | 1e-3 | 2.43 | 70 344 | 325 501 | 32768 |
+| 5 | 3e-4 | 5.01 | 153 328 | | |
+| 5 | 1e-4 | 10.60 | 260 124 | 278 535 | 16384 |
+
+Depth 5 at a `1e-3` floor is the default. Spending four times as long per move
+on the `1e-4` floor below it buys nothing: the two rows are within the noise of
+each other, and 2048 scores are noisy enough that the twelve- and twenty-four
+game samples here separate 2x differences and not much finer.
+
+Games are independent, so the parallelism is one game per core and nothing
+inside the search: splitting a search would cap out at the four root moves and
+force a transposition table to be shared across threads. Twelve threads reach
+about 10x the single-core node rate on an 8+4 core M2 Max, and the per-move
+latency above degrades to 3.33 ms when all twelve are busy.
+
 ## Testing
 
 `tests/reference/` holds a naive `[[u8; 4]; 4]` implementation that slides by
@@ -137,6 +192,8 @@ on a 64 or a 128 most of the time and reach 1024 never.
 cargo run --release --example play           # wasd in the terminal
 cargo run --release --example play -- 12345  # from a seed, to replay a game
 cargo run --release --example random_agent   # playout statistics
+cargo run --release --example expectimax     # an agent that reaches 32768
+cargo run --release --example expectimax -- --games 4 --depth 4 --floor 1e-3
 ```
 
 ## License

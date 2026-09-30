@@ -178,6 +178,32 @@ impl Board {
         ]
     }
 
+    /// Reflects the board about its main diagonal, so cell `(r, c)` ends up at
+    /// `(c, r)`.
+    ///
+    /// Two delta swaps and no memory traffic. This is its own inverse. It is
+    /// public because an evaluation function that scores a line at a time
+    /// needs the columns as rows, which is otherwise the one thing a search
+    /// has to reimplement.
+    ///
+    /// ```
+    /// # use twenty48::Board;
+    /// let board = Board::from_tiles([
+    ///     [2, 4, 0, 0],
+    ///     [0, 0, 0, 0],
+    ///     [0, 0, 0, 0],
+    ///     [0, 0, 0, 0],
+    /// ]).unwrap();
+    ///
+    /// assert_eq!(board.transpose().get(1, 0), 4);
+    /// assert_eq!(board.transpose().transpose(), board);
+    /// ```
+    #[inline(always)]
+    #[must_use]
+    pub const fn transpose(self) -> Board {
+        Board(transpose(self.0))
+    }
+
     /// Whether `dir` changes the board.
     #[inline(always)]
     pub fn can_move(self, dir: Direction) -> bool {

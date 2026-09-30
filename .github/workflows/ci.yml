@@ -34,9 +34,15 @@ jobs:
       - run: cargo bench --no-run
 
       # Table indices are written so that LLVM can fold the bounds check away,
-      # which is what lets the crate be `forbid(unsafe_code)` without paying
+      # which is what lets the engine be `forbid(unsafe_code)` without paying
       # for the checks. Fail the build if one comes back after a refactor.
-      - name: No bounds checks on the hot path
+      #
+      # The clean is what makes this honest: a cached build emits no assembly,
+      # the glob then matches nothing, and the grep would pass by finding no
+      # file rather than no bounds check. The `ls` is the same guard again.
+      - name: No bounds checks in the engine
         run: |
-          cargo rustc --release --lib -- --emit=asm
-          ! grep -q panic_bounds_check target/release/deps/*.s
+          cargo clean -p twenty48
+          cargo rustc --release -p twenty48 --lib -- --emit=asm
+          ls target/release/deps/twenty48-*.s
+          ! grep -q panic_bounds_check target/release/deps/twenty48-*.s

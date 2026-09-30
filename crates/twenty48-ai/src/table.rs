@@ -51,9 +51,10 @@ impl Table {
     const SLOTS: usize = 1 << 18;
 
     pub fn new(threads: usize) -> Table {
-        let slots = Table::SLOTS * threads.next_power_of_two();
         Table {
-            slots: (0..slots).map(|_| Slot::default()).collect(),
+            slots: (0..Table::SLOTS * threads.next_power_of_two())
+                .map(|_| Slot::default())
+                .collect(),
             // Slots start zeroed, which reads back as key zero, so the first
             // move must not use the salt that would make that a hit.
             stamp: AtomicU64::new(1),

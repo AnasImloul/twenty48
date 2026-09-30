@@ -9,31 +9,31 @@ use crate::Config;
 use crate::heuristic::Heuristic;
 use crate::table::Table;
 
-/// One subtree hanging off the root chance layer: the position after a root
-/// move and one of the tiles the game could place in reply.
+/// One subtree two plies below the root: a tile the game could place in reply
+/// to a root move, and one of the answers to it.
+///
+/// The obvious unit of work is a ply shallower, one job per tile the game
+/// could place, but that is too coarse to fill a desktop machine. The largest
+/// of those jobs measured around 12% of a move's total work, more than an
+/// even share of twelve cores, so eleven threads finished and waited on it and
+/// no scheduling of that list could have done better. Splitting the reply as
+/// well triples the count and cuts the largest job to roughly a third.
 pub struct Job {
-    /// Which root move this contributes to, as a [`twenty48::Direction`]
-    /// index.
-    pub dir: usize,
+    /// Which chance-layer entry this is one answer to.
+    pub group: usize,
     board: Board,
     depth: u32,
     probability: f32,
-    /// 0.9 for a spawned 2, 0.1 for a 4. Kept apart from `probability`
-    /// instead of folded into it because the reduction has to add
-    /// `weight * value` the way the serial search would, and
-    /// `Σ 0.9·x / n` is not `Σ (0.9/n)·x` in `f32`.
-    pub weight: f32,
     value: AtomicU32,
 }
 
 impl Job {
-    pub fn new(dir: usize, board: Board, depth: u32, probability: f32, weight: f32) -> Job {
+    pub fn new(group: usize, board: Board, depth: u32, probability: f32) -> Job {
         Job {
-            dir,
+            group,
             board,
             depth,
             probability,
-            weight,
             value: AtomicU32::new(0),
         }
     }
@@ -71,11 +71,18 @@ impl Worker {
     /// Evaluates `job` and stores the answer in it.
     pub fn run(&mut self, job: &Job, config: Config) {
         self.config = config;
-        let value = self.best(job.board, job.depth, job.probability);
+        let value = self.chance(job.board, job.depth, job.probability);
         job.value.store(value.to_bits(), Ordering::Relaxed);
     }
 
     /// Value of `board` averaged over the tile about to appear on it.
+    ///
+    /// Inlined on purpose. Folded into [`Worker::best`] the two halves of the
+    /// recursion are one function, and left to itself the compiler stops
+    /// folding them as soon as [`Worker::run`] gives this a second caller,
+    /// which costs a real call at every level of the tree and measured a fifth
+    /// of the node rate.
+    #[inline(always)]
     fn chance(&mut self, board: Board, depth: u32, probability: f32) -> f32 {
         if depth == 0 || probability < self.config.floor {
             return self.heuristic.eval(board);

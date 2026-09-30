@@ -7,12 +7,16 @@ use twenty48::Board;
 /// weights are the ones from nneonneo's 2048-ai, which are well tuned and not
 /// worth rediscovering by hand.
 pub struct Heuristic {
-    line: Vec<f32>,
+    /// A boxed array rather than a `Vec`, so the length is a fact the
+    /// compiler has rather than a field it has to load. An index is already
+    /// known to fit a `u16`, so against a fixed 65536 the bounds check folds
+    /// away and `eval` compiles to eight bare loads.
+    line: Box<[f32; 65536]>,
 }
 
 impl Heuristic {
     pub fn new() -> Heuristic {
-        let mut line = vec![0.0f32; 65536];
+        let mut line = vec![0.0f32; 65536].into_boxed_slice();
         for (index, value) in line.iter_mut().enumerate() {
             let ranks = [
                 (index >> 12) as u32 & 0xF,
@@ -22,7 +26,11 @@ impl Heuristic {
             ];
             *value = score_line(ranks);
         }
-        Heuristic { line }
+        Heuristic {
+            line: line
+                .try_into()
+                .expect("the table was built with 65536 entries"),
+        }
     }
 
     pub fn eval(&self, board: Board) -> f32 {

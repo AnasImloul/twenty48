@@ -170,12 +170,22 @@ busy.
 
 `Search::with_threads` instead splits a single move, which is what a UI wants,
 because there is only one game on screen to spend the machine on. The split is
-the root chance layer rather than the four root moves: every (move, spawned
-tile) pair below the root is an independent subtree, so a mid-game position
-offers around fifty pieces of work instead of four. Twelve threads take the
-default depth from 1.82 ms to 0.52 ms per move. That is 3.5x the latency
-against 4.5x the node rate, the gap being work the threads duplicate before
-the shared table catches up.
+two plies down rather than on the four root moves: a piece of work is a root
+move, a tile the game could place in reply, and one answer to that tile, which
+gives a mid-game position a hundred or so pieces instead of four. Twelve
+threads take the default depth to a fifth of the single-threaded latency per
+move.
+
+Getting that granularity right was most of the work. Stopping a ply short, one
+piece per tile the game could place, looks like plenty of parallelism at fifty
+pieces, but the largest of them measured around 12% of a move's work, which is
+more than a twelfth: eleven threads finished and waited on one. Utilisation sat
+at 62% of twelve cores and no scheduling of that list could have passed 70%.
+Splitting the reply as well triples the count and measures 75% of twelve cores
+and a fifth off the latency. Running the large pieces first balances the batch
+better still and is not worth it: neighbouring pieces share most of their
+subtree, so visiting them apart empties the transposition table between them
+and loses more node rate than the balance gains.
 
 Shared, not one per thread. The transposition table is not only a cache: an
 entry satisfies any request for its board at that depth *or shallower*, so a
@@ -183,8 +193,11 @@ hit often returns a better answer than the caller would have computed. Giving
 each thread its own measures three times the nodes and one fifth of the score.
 The price of sharing it is reproducibility, because which thread reaches a
 position first decides what later lookups of it return, so seeded games only
-replay exactly on `Search::new`. Over the same twelve seeds the split search
-means 328 079 against 341 636, which is inside the noise.
+replay exactly on `Search::new`. It costs a little strength too: over
+twenty-four seeds the split search means 275 432 against 336 501 serial, and
+reaches 16384 in eleven games against sixteen. Both find 32768 twice. That is
+a real if modest loss and not merely a noisy sample, which is the trade the
+split makes for answering five times sooner.
 
 ## Testing
 

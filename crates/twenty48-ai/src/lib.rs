@@ -90,12 +90,13 @@ impl Search {
 
     /// Builds a searcher that spreads each move over `threads` threads.
     ///
-    /// The split is the root chance layer rather than the four root moves:
-    /// every (move, spawned tile) pair below the root is an independent
-    /// subtree, so a mid-game position with six empty cells gives around
-    /// fifty pieces of work, which is enough to keep a desktop machine busy.
-    /// Splitting on moves alone would give four, one of which is usually much
-    /// the largest.
+    /// The split is two plies down rather than on the four root moves, so a
+    /// piece of work is a root move, a tile the game could place in reply, and
+    /// one answer to that tile. A mid-game position gives a hundred or so of
+    /// them. Splitting on the root moves alone would give four, one of which
+    /// is usually much the largest; stopping a ply short of this still left
+    /// the largest piece bigger than a twelfth of the move on a twelve-core
+    /// machine, which held utilisation to around 60%.
     ///
     /// The threads share one transposition table, so they help each other
     /// rather than each rediscovering the same positions. The cost of that is
@@ -146,7 +147,7 @@ impl Search {
         // A legal move always vacates a cell, either by merging or by moving
         // a tile out of one, so a zero here means the move was illegal.
         let mut empties = [0u32; 4];
-        let mut jobs = Vec::new();
+        let mut chances = Vec::new();
 
         for dir in Direction::ALL {
             let next = moves[dir.index()];
@@ -159,16 +160,27 @@ impl Search {
             let (two, four) = (0.9 / empty as f32, 0.1 / empty as f32);
             for offset in next.empty_cells() {
                 let at = |exponent, probability, weight| {
-                    Job::new(
-                        dir.index(),
-                        next.spawn_at(offset, exponent),
-                        depth - 1,
-                        probability,
-                        weight,
-                    )
+                    let board = next.spawn_at(offset, exponent);
+                    Chance::new(dir.index(), board, probability, weight)
                 };
-                jobs.push(at(1, two, 0.9));
-                jobs.push(at(2, four, 0.1));
+                chances.push(at(1, two, 0.9));
+                chances.push(at(2, four, 0.1));
+            }
+        }
+
+        // Built in the order a single thread would have walked them, which is
+        // the order the serial path below runs them in. Reordering the list to
+        // put the large jobs first balances the batch better but costs more
+        // than it gains: neighbouring jobs share most of their subtree, so
+        // visiting them apart empties the transposition table between them and
+        // measured around a fifth off the node rate.
+        let mut jobs = Vec::with_capacity(chances.len() * 3);
+        for (group, chance) in chances.iter().enumerate() {
+            for next in chance.board.shift_all() {
+                if next == chance.board {
+                    continue;
+                }
+                jobs.push(Job::new(group, next, depth - 1, chance.probability));
             }
         }
 
@@ -181,12 +193,23 @@ impl Search {
                 }
             }
         }
+        // The chance layer is a level of the tree that no job walked, so it
+        // goes on the node count here instead.
+        self.delegated += chances.len() as u64;
 
-        // Summed in job order and divided per direction at the end, which is
-        // the order a single thread walking the tree would have used.
-        let mut totals = [0.0f32; 4];
+        // Two passes, because the two reductions are not alike. A maximum is
+        // exact in whatever order it is taken, so the jobs fold in the order
+        // they were dispatched. A sum is not, so the weighted total is
+        // accumulated over `chances`, which is the order a single thread
+        // walking the tree would have used.
         for job in jobs.iter() {
-            totals[job.dir] += job.weight * job.value();
+            let chance = &mut chances[job.group];
+            chance.value = chance.value.max(job.value());
+        }
+
+        let mut totals = [0.0f32; 4];
+        for chance in &chances {
+            totals[chance.dir] += chance.weight * chance.value;
         }
 
         let mut best = None;
@@ -204,5 +227,36 @@ impl Search {
         }
 
         best
+    }
+}
+
+/// One tile the game could place in reply to a root move, and the value of
+/// the best answer to it.
+///
+/// A position with no legal answer keeps its zero, which is far below any
+/// evaluation the heuristic produces, so losing is avoided without a special
+/// case anywhere in the search.
+struct Chance {
+    /// Which root move this contributes to, as a [`Direction`] index.
+    dir: usize,
+    board: Board,
+    probability: f32,
+    /// 0.9 for a spawned 2, 0.1 for a 4. Kept apart from `probability`
+    /// instead of folded into it because the reduction has to add
+    /// `weight * value` the way the serial search would, and
+    /// `Σ 0.9·x / n` is not `Σ (0.9/n)·x` in `f32`.
+    weight: f32,
+    value: f32,
+}
+
+impl Chance {
+    fn new(dir: usize, board: Board, probability: f32, weight: f32) -> Chance {
+        Chance {
+            dir,
+            board,
+            probability,
+            weight,
+            value: 0.0,
+        }
     }
 }

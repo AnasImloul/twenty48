@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: rustup component add rustfmt clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+
+      # The exhaustive table tests are slow in debug, and the table code is
+      # optimisation-sensitive enough to be worth testing as it ships.
+      - run: cargo test --release
+
+      - run: cargo doc --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+
+      - run: cargo bench --no-run
+
+      # Table indices are written so that LLVM can fold the bounds check away,
+      # which is what lets the crate be `forbid(unsafe_code)` without paying
+      # for the checks. Fail the build if one comes back after a refactor.
+      - name: No bounds checks on the hot path
+        run: |
+          cargo rustc --release --lib -- --emit=asm
+          ! grep -q panic_bounds_check target/release/deps/*.s

@@ -1,0 +1,149 @@
+# twenty48
+
+A 2048 engine for Rust, built so that a GUI, a CLI and a search agent can all
+drive the same rules. The whole board is one `u64` and sliding a row is a table
+lookup, which puts a move at a handful of instructions and nothing on the heap.
+
+The engine is split in two. `Board` is pure: it applies moves and knows nothing
+about randomness or score history, which is what a search wants. `Game` wraps
+it with a running score and a seeded tile source, which is what a frontend
+wants.
+
+## Usage
+
+```rust
+use twenty48::{Direction, Game, MoveError};
+
+let mut game = Game::new(0xC0FFEE);
+
+match game.play(Direction::Left) {
+    Ok(round) => println!("scored {}, tile at {:?}", round.gained, round.spawn),
+    Err(MoveError::Illegal(dir)) => println!("nothing moves {dir}"),
+    Err(MoveError::GameOver) => println!("final score {}", game.score()),
+}
+```
+
+The seed fixes the entire sequence of spawned tiles, so replaying the same moves
+against the same seed reproduces the game exactly. That is what makes "policy A
+beats policy B over ten thousand games" a claim you can re-run.
+
+## Driving it from a search
+
+The deterministic slide and the random spawn are separate operations, so a
+search can enumerate every tile the game might place instead of sampling one:
+
+```rust
+use twenty48::{Board, Direction};
+
+let board = Board::from_tiles([
+    [2, 2, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+]).unwrap();
+
+let (next, gained) = board.shift_scored(Direction::Left);
+assert_eq!(gained, 4);
+
+for offset in next.empty_cells() {
+    for exponent in [1, 2] {
+        let _child = next.spawn_at(offset, exponent);
+    }
+}
+```
+
+Use `Board::shift_all` rather than four calls to `Board::shift` when expanding a
+node; it shares the transpose between the vertical moves and leaves sixteen
+table loads with no dependencies between them.
+
+## How it works
+
+Every tile is a power of two, so a cell only needs to store `log2(tile)`: four
+bits, with zero meaning empty. Sixteen cells is 64 bits, so a `Board` is one
+`u64`, is `Copy`, lives in a register and lets a search keep snapshots on the
+stack instead of maintaining an undo log. Cell `(row, col)` sits at bit
+`60 - 16*row - 4*col`, most significant nibble first, so a board written as a
+hex literal reads in the same order as the grid.
+
+Once a board is a `u64` a row is a `u16`, of which there are only 65536, so the
+result of sliding one is a lookup rather than a loop. The tables hold the slid
+row and the points its merges scored, for each of the two horizontal
+directions; vertical moves transpose first, which is fourteen ALU ops and no
+memory traffic. They are built by const evaluation, which keeps their base
+address a link-time constant: no lazy-init branch and no atomic load on the hot
+path.
+
+The tables are 768 KiB, which is the usual reason to be suspicious of this
+design. The objection does not survive measurement: reachable rows are
+dominated by small exponents and mostly-monotone runs, and a couple of hundred
+thousand lookups over 256 games touch 3390 of the 65536 rows, spanning 20 KiB
+of each table. Sliding real boards runs about 20% faster than sliding boards
+made of random bits, and the `cargo bench` output reports both so the gap stays
+visible.
+
+Game over is answered without materialising any moves. A board with an empty
+cell is never over; a full one is over only when no two adjacent tiles can
+merge, which an XOR against a shifted copy answers in bit operations alone,
+with no table lookups and no moves applied.
+
+The crate is `#![forbid(unsafe_code)]`. Table indices are written
+`(bits >> 48) as u16 as usize` rather than with an explicit mask, which hands
+LLVM the range as a type fact and folds the bounds check away; CI greps the
+release assembly for `panic_bounds_check` to keep it that way.
+
+## Measured throughput
+
+```
+shift, played boards         724.6 M shifts/s
+shift, random boards         591.1 M shifts/s
+spawn, draw and place         74.3 M spawns/s
+round, random policy          22.1 M rounds/s
+round, down-first policy      40.1 M rounds/s
+node, expectimax depth 3     293.4 M nodes/s
+```
+
+Apple M2 Max, rustc 1.94.1, `lto = "fat"` and `codegen-units = 1`. Reproduce
+with `cargo bench`, which uses a hand-rolled harness and no dev-dependencies.
+
+The three rates are reported separately because they differ by an order of
+magnitude. A *shift* is one slide and nothing else. A *round* is what a game
+does per move: slide, legality, the spawn including its random draw, and the
+game-over check. A *node* is a position visited by a depth-3 expectimax whose
+position evaluation is one instruction, so it measures the engine under a
+search rather than the search itself.
+
+## Testing
+
+`tests/reference/` holds a naive `[[u8; 4]; 4]` implementation that slides by
+filtering into a `Vec` and walking pairs. It shares no structure with the
+packed engine, so the two are wrong in the same way only by coincidence, and
+everything else is checked against it:
+
+- Every one of the 65536 rows, slid in all four directions, row and score.
+- Seeded playouts driven through both in lockstep, compared after every move.
+- `is_game_over` against the naive "no move changes the board", over a corpus
+  of positions taken from real games rather than random bits.
+- The tile total is conserved by every shift, and a move's score is the value
+  of the tiles it created, derived from exponent histograms rather than from
+  the engine's own accounting.
+
+`cargo run --release --example random_agent` plays ten thousand seeded games
+and reports the distribution of final tiles, which for random play should end
+on a 64 or a 128 most of the time and reach 1024 never.
+
+## Examples
+
+```sh
+cargo run --release --example play           # wasd in the terminal
+cargo run --release --example play -- 12345  # from a seed, to replay a game
+cargo run --release --example random_agent   # playout statistics
+```
+
+## License
+
+Dual licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.

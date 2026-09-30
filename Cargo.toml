@@ -1,0 +1,21 @@
+[package]
+name = "twenty48"
+version = "0.1.0"
+edition = "2024"
+description = "A 2048 engine built on a u64 bitboard."
+license = "MIT OR Apache-2.0"
+keywords = ["2048", "game", "bitboard", "expectimax"]
+categories = ["games", "game-development"]
+readme = "README.md"
+exclude = [".github/", ".idea/"]
+
+[dependencies]
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+debug = 1

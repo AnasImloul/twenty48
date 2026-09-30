@@ -1,15 +1,70 @@
 # twenty48
 
-A 2048 engine for Rust, built so that a GUI, a CLI and a search agent can all
-drive the same rules. The whole board is one `u64` and sliding a row is a table
-lookup, which puts a move at a handful of instructions and nothing on the heap.
+A 2048 engine and an expectimax agent that plays it to 32768, the largest tile
+the board can hold, in a few milliseconds per move. Ships as a desktop app you
+can watch it play in, and as two libraries if you want to drive the rules or
+the search yourself.
+
+![The desktop app, showing a finished game scoring 623992 with a 32768 tile](https://raw.githubusercontent.com/AnasImloul/twenty48/main/docs/screenshot.png)
+
+That game is the agent at depth 8, which it played to 32768 and on to a score
+of 623992 over 21977 moves, at 3.1 ms and 90476 nodes per move. Reaching the
+largest tile is routine rather than lucky: over twenty-four seeded games at the
+default settings the median score is 342976, and every game ends on 8192 or
+better. The [full distribution](#an-agent) is below.
+
+## Get it
+
+Every push to `main` publishes binaries for macOS, Linux and Windows to the
+[`latest`](https://github.com/AnasImloul/twenty48/releases/tag/latest) release.
+Download the archive for your platform, unpack it, and run `twenty48-gui`. They
+are unsigned, so the first launch needs a nudge: on macOS
+`xattr -d com.apple.quarantine twenty48-gui`, on Windows "More info" then
+"Run anyway".
+
+To build it yourself, with a Rust toolchain installed:
+
+```sh
+cargo run --release -p twenty48-gui
+```
+
+Use `--release`. A debug build searches the same tree with none of the
+optimisations and takes seconds per move rather than milliseconds.
+
+## Using the app
+
+Arrow keys or WASD play by hand. Everything else is the panel on the right.
+
+**Game.** The text box holds the seed, which fixes the entire sequence of
+spawned tiles: `new` starts that seed, `random` picks a fresh one and shows it,
+and the same seed always replays the same game. `undo` steps back a move, as
+far back as you like.
+
+**Agent.** `play` hands it the game and it plays until the board is dead or you
+pause it; `step` gives it one move; `hint` shows the move it would make and
+leaves the playing to you. The speed slider throttles it down to one move a
+second if you want to follow along, or up to `max` to watch a game finish in a
+few seconds.
+
+**Search.** `depth` bounds how far ahead it looks and `floor` is the
+probability below which a branch is evaluated rather than expanded. They bind
+at opposite ends of the game, which is why both are exposed: depth bounds the
+late game, where the board is crowded, and the floor bounds the early one,
+where a chance node fans out thirty ways and depth alone bounds nothing.
+Raising either makes the agent stronger and slower, and both take effect on the
+agent's next move, so you can turn depth up mid-game and watch the cost in the
+throughput panel.
+
+**Throughput** reports what the last move actually cost: wall time, nodes
+visited, and the node rate across all the threads the search ran on.
+
+## Using the engine
 
 The engine is split in two. `Board` is pure: it applies moves and knows nothing
 about randomness or score history, which is what a search wants. `Game` wraps
 it with a running score and a seeded tile source, which is what a frontend
-wants.
-
-## Usage
+wants. The whole board is one `u64` and sliding a row is a table lookup, which
+puts a move at a handful of instructions and nothing on the heap.
 
 ```rust
 use twenty48::{Direction, Game, MoveError};
@@ -23,9 +78,9 @@ match game.play(Direction::Left) {
 }
 ```
 
-The seed fixes the entire sequence of spawned tiles, so replaying the same moves
-against the same seed reproduces the game exactly. That is what makes "policy A
-beats policy B over ten thousand games" a claim you can re-run.
+Replaying the same moves against the same seed reproduces the game exactly,
+which is what makes "policy A beats policy B over ten thousand games" a claim
+you can re-run.
 
 ## Driving it from a search
 
@@ -117,9 +172,10 @@ search rather than the search itself.
 
 ## An agent
 
-`examples/expectimax.rs` is a real player rather than a demonstration, and it
-exists mostly to check that the API is adequate for the consumer it was
-designed around. Twenty-four seeded games at the default settings:
+`crates/twenty48-ai/examples/expectimax.rs` is a real player rather than a
+demonstration, and it exists mostly to check that the API is adequate for the
+consumer it was designed around. Twenty-four seeded games at the default
+settings:
 
 ```
 70127 nodes and 3.33 ms per move, 298049 moves over all games
@@ -201,10 +257,10 @@ split makes for answering five times sooner.
 
 ## Testing
 
-`tests/reference/` holds a naive `[[u8; 4]; 4]` implementation that slides by
-filtering into a `Vec` and walking pairs. It shares no structure with the
-packed engine, so the two are wrong in the same way only by coincidence, and
-everything else is checked against it:
+`crates/twenty48/tests/reference/` holds a naive `[[u8; 4]; 4]` implementation
+that slides by filtering into a `Vec` and walking pairs. It shares no structure
+with the packed engine, so the two are wrong in the same way only by
+coincidence, and everything else is checked against it:
 
 - Every one of the 65536 rows, slid in all four directions, row and score.
 - Seeded playouts driven through both in lockstep, compared after every move.
@@ -221,6 +277,7 @@ on a 64 or a 128 most of the time and reach 1024 never.
 ## Examples
 
 ```sh
+cargo run --release -p twenty48-gui          # the desktop app
 cargo run --release --example play           # wasd in the terminal
 cargo run --release --example play -- 12345  # from a seed, to replay a game
 cargo run --release --example random_agent   # playout statistics
@@ -232,7 +289,9 @@ cargo run --release --example expectimax -- --games 4 --depth 4 --floor 1e-3
 
 Dual licensed under either of
 
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
-- MIT License ([LICENSE-MIT](LICENSE-MIT))
+- Apache License, Version 2.0
+  ([LICENSE-APACHE](https://github.com/AnasImloul/twenty48/blob/main/LICENSE-APACHE))
+- MIT License
+  ([LICENSE-MIT](https://github.com/AnasImloul/twenty48/blob/main/LICENSE-MIT))
 
 at your option.

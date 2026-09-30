@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# A push that lands while an earlier one is still building would otherwise race
+# it to the `latest` tag and could publish the older binaries second.
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: macos-aarch64
+            os: macos-14
+            target: aarch64-apple-darwin
+          - name: macos-x86_64
+            os: macos-14
+            target: x86_64-apple-darwin
+          - name: windows-x86_64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # eframe links against the system windowing and input libraries, which
+      # the Ubuntu runner does not carry by default.
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev \
+            libxcb-render0-dev \
+            libxcb-shape0-dev \
+            libxcb-xfixes0-dev \
+            libxkbcommon-dev \
+            libssl-dev
+
+      - name: Install toolchain
+        run: rustup target add ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked -p twenty48-gui --target ${{ matrix.target }}
+
+      # Both branches stage into `stage/$stem` first, so that the archive
+      # unpacks into one directory rather than spraying four files into the
+      # current one, and so that 7z records the staged path and not the
+      # `target/<triple>/release/` one it was built at.
+      - name: Package
+        shell: bash
+        run: |
+          stem=twenty48-${{ matrix.name }}
+          bin=target/${{ matrix.target }}/release/twenty48-gui
+          mkdir -p dist "stage/$stem"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$bin.exe" README.md LICENSE-MIT LICENSE-APACHE "stage/$stem/"
+            (cd stage && 7z a "../dist/$stem.zip" "$stem")
+          else
+            cp "$bin" README.md LICENSE-MIT LICENSE-APACHE "stage/$stem/"
+            tar -czf "dist/$stem.tar.gz" -C stage "$stem"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # `latest` is a rolling prerelease rather than a version tag, so that the
+      # download URLs stay put across pushes. Deleting it first is what moves
+      # the tag; `gh release create` will not overwrite an existing one.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest dist/* \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "Latest build" \
+            --notes "Built from [\`${GITHUB_SHA:0:7}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA}) on $(date -u '+%Y-%m-%d'). Unsigned, so macOS needs \`xattr -d com.apple.quarantine\` and Windows SmartScreen needs More info then Run anyway."

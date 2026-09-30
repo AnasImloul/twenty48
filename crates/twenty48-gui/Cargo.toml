@@ -6,6 +6,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "wgpu"] }
+# `x11` is what gives winit a Linux backend; without it the platform is
+# unsupported and the crate does not compile there. It costs nothing at build
+# time, since x11-dl loads libX11 at runtime rather than linking it.
+eframe = { version = "0.35.0", default-features = false, features = ["default_fonts", "wgpu", "x11"] }
 twenty48.workspace = true
 twenty48-ai.workspace = true
